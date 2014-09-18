@@ -1,0 +1,982 @@
+diff --git a/core/java/android/app/Activity.java b/core/java/android/app/Activity.java
+index fb87a18..32f882b 100644
+--- a/core/java/android/app/Activity.java
++++ b/core/java/android/app/Activity.java
+@@ -21,6 +21,7 @@ import android.util.SuperNotCalledException;
+ import com.android.internal.app.ActionBarImpl;
+ import com.android.internal.policy.PolicyManager;
+ 
++import android.app.ActivityManager.StackBoxInfo;
+ import android.content.ComponentCallbacks2;
+ import android.content.ComponentName;
+ import android.content.ContentResolver;
+@@ -85,6 +86,7 @@ import java.io.FileDescriptor;
+ import java.io.PrintWriter;
+ import java.util.ArrayList;
+ import java.util.HashMap;
++import java.util.List;
+ 
+ /**
+  * An activity is a single, focused thing that the user can do.  Almost all
+@@ -5240,6 +5242,9 @@ public class Activity extends ContextThemeWrapper
+     }
+ 
+     final void performCreate(Bundle icicle) {
++        //Ritter_stackbox
++        mWindow.setStackBoxID(getStackBoxID());
++        //end
+         onCreate(icicle);
+         mVisibleFromClient = !mWindow.getWindowStyle().getBoolean(
+                 com.android.internal.R.styleable.Window_windowNoDisplay, false);
+@@ -5464,4 +5469,29 @@ public class Activity extends ContextThemeWrapper
+          */
+         public void onTranslucentConversionComplete(boolean drawComplete);
+     }
++
++    //Ritter_stackbox
++    public int getStackBoxID(){
++        if(mIntent == null || ((mIntent.getFlags() & Intent.FLAG_ACTIVITY_IN_MULTI_WINDOW) == 0)){
++            return -1;
++        } else {
++            int taskID = getTaskId();
++            try {
++                List<StackBoxInfo> stackBoxInfoList = ActivityManagerNative.getDefault().getStackBoxes();
++                for (StackBoxInfo sbInfo : stackBoxInfoList) {
++                    if ((sbInfo.stackBoxId != 0) && (sbInfo.stack != null) && (sbInfo.stack.taskIds != null)) {
++                        for (int i = 0; i < sbInfo.stack.taskIds.length; i++) {
++                            if (taskID == sbInfo.stack.taskIds[i]) {
++                                return sbInfo.stackBoxId;
++                            }
++                        }
++                    }
++                }
++            } catch (RemoteException e) {
++                // TODO Auto-generated catch block
++                e.printStackTrace();
++            }
++        }
++        return -1;
++    }
+ }
+diff --git a/core/java/android/app/ActivityManagerNative.java b/core/java/android/app/ActivityManagerNative.java
+index f2013d6..ac17db9 100644
+--- a/core/java/android/app/ActivityManagerNative.java
++++ b/core/java/android/app/ActivityManagerNative.java
+@@ -31,6 +31,7 @@ import android.content.pm.ParceledListSlice;
+ import android.content.pm.UserInfo;
+ import android.content.res.Configuration;
+ import android.graphics.Bitmap;
++import android.graphics.Rect;
+ import android.net.Uri;
+ import android.os.Binder;
+ import android.os.Bundle;
+@@ -2045,6 +2046,19 @@ public abstract class ActivityManagerNative extends Binder implements IActivityM
+             reply.writeNoException();
+             return true;
+         }*/
++
++        //Ritter_stackbox
++        case RITTER_RELAYOUT_WINDOW: {
++            data.enforceInterface(IActivityManager.descriptor);
++            int stackId = data.readInt();
++            Rect r = new Rect();
++            r.readFromParcel(data);
++            boolean[] ret = new boolean[1];
++            ret[0] = relayoutWindow(stackId, r);
++            reply.writeNoException();
++            reply.writeBooleanArray(ret);
++            return true;
++        }
+         }
+ 
+         return super.onTransact(code, data, reply, flags);
+@@ -4703,4 +4717,20 @@ class ActivityManagerProxy implements IActivityManager
+         data.recycle();
+     }*/
+ 
++    //Ritter_stackbox
++    public boolean relayoutWindow(int stackBoxID, Rect r) throws RemoteException {
++        Parcel data = Parcel.obtain();
++        Parcel reply = Parcel.obtain();
++        data.writeInterfaceToken(IActivityManager.descriptor);
++        data.writeInt(stackBoxID);
++        int flags = 0;
++        r.writeToParcel(data, flags);
++        mRemote.transact(RITTER_RELAYOUT_WINDOW, data, reply, 0);
++        reply.readException();
++        boolean[] ret = new boolean[1];
++        reply.readBooleanArray(ret);
++        data.recycle();
++        reply.recycle();
++        return ret[0];
++    }
+ }
+diff --git a/core/java/android/app/IActivityManager.java b/core/java/android/app/IActivityManager.java
+index 0194fda..42b7b1f 100644
+--- a/core/java/android/app/IActivityManager.java
++++ b/core/java/android/app/IActivityManager.java
+@@ -36,6 +36,7 @@ import android.content.pm.ProviderInfo;
+ import android.content.pm.UserInfo;
+ import android.content.res.Configuration;
+ import android.graphics.Bitmap;
++import android.graphics.Rect;
+ import android.net.Uri;
+ import android.os.Bundle;
+ import android.os.Debug;
+@@ -413,6 +414,10 @@ public interface IActivityManager extends IInterface {
+ 
+     //Ritter_Multi
+ //    public void moveTaskToTop_AM(int taskID) throws RemoteException;
++
++    //Ritter_stackbox
++    public boolean relayoutWindow(int stackBoxID, Rect frame) throws RemoteException;
++
+     /*
+      * Private non-Binder interfaces
+      */
+@@ -702,4 +707,7 @@ public interface IActivityManager extends IInterface {
+     //Ritter_Multi
+     int RITTER_MOVE_HOME_TO_TOP = IBinder.FIRST_CALL_TRANSACTION+183;
+ //    int RITTER_MOVE_TASK_TO_TOP = IBinder.FIRST_CALL_TRANSACTION+184;
++
++    //Ritter_stackbox
++    int RITTER_RELAYOUT_WINDOW= IBinder.FIRST_CALL_TRANSACTION+184;
+ }
+diff --git a/core/java/android/content/Intent.java b/core/java/android/content/Intent.java
+index a289649..62cb0e2 100644
+--- a/core/java/android/content/Intent.java
++++ b/core/java/android/content/Intent.java
+@@ -3395,6 +3395,10 @@ public class Intent implements Parcelable, Cloneable {
+      */
+     public static final int FLAG_GRANT_PERSISTABLE_URI_PERMISSION = 0x00000040;
+ 
++    //Ritter_stackbox
++    public static final int FLAG_ACTIVITY_IN_MULTI_WINDOW = 0x00000080;
++    //end
++
+     /**
+      * If set, the new activity is not kept in the history stack.  As soon as
+      * the user navigates away from it, the activity is finished.  This may also
+diff --git a/core/java/android/view/View.java b/core/java/android/view/View.java
+index e2d98ed..a430a64 100644
+--- a/core/java/android/view/View.java
++++ b/core/java/android/view/View.java
+@@ -14035,6 +14035,8 @@ public class View implements Drawable.Callback, KeyEvent.Callback,
+      * to be called from anywhere else other than ViewGroup.drawChild().
+      */
+     boolean draw(Canvas canvas, ViewGroup parent, long drawingTime) {
++        Log.d(VIEW_LOG_TAG,"Ritter::View draw()A");
++        long start_time = System.currentTimeMillis();
+         boolean useDisplayListProperties = mAttachInfo != null && mAttachInfo.mHardwareAccelerated;
+         boolean more = false;
+         final boolean childHasIdentityMatrix = hasIdentityMatrix();
+@@ -14366,7 +14368,8 @@ public class View implements Drawable.Callback, KeyEvent.Callback,
+         }
+ 
+         mRecreateDisplayList = false;
+-
++        long end_time = System.currentTimeMillis();
++        Log.d(VIEW_LOG_TAG,"Ritter::View draw()A end:"+(end_time - start_time));
+         return more;
+     }
+ 
+@@ -14380,6 +14383,8 @@ public class View implements Drawable.Callback, KeyEvent.Callback,
+      * @param canvas The Canvas to which the View is rendered.
+      */
+     public void draw(Canvas canvas) {
++        Log.d(VIEW_LOG_TAG,"Ritter::View draw()B start");
++        long start_time = System.currentTimeMillis();
+         if (mClipBounds != null) {
+             canvas.clipRect(mClipBounds);
+         }
+@@ -14585,6 +14590,8 @@ public class View implements Drawable.Callback, KeyEvent.Callback,
+         if (mOverlay != null && !mOverlay.isEmpty()) {
+             mOverlay.getOverlayView().dispatchDraw(canvas);
+         }
++        long end_time = System.currentTimeMillis();
++        Log.d(VIEW_LOG_TAG,"Ritter::View draw()B end:"+(end_time - start_time));
+     }
+ 
+     /**
+@@ -14768,6 +14775,8 @@ public class View implements Drawable.Callback, KeyEvent.Callback,
+      */
+     @SuppressWarnings({"unchecked"})
+     public void layout(int l, int t, int r, int b) {
++        Log.d(VIEW_LOG_TAG,"Ritter::View layout() start");
++        long start_time = System.currentTimeMillis();
+         if ((mPrivateFlags3 & PFLAG3_MEASURE_NEEDED_BEFORE_LAYOUT) != 0) {
+             onMeasure(mOldWidthMeasureSpec, mOldHeightMeasureSpec);
+             mPrivateFlags3 &= ~PFLAG3_MEASURE_NEEDED_BEFORE_LAYOUT;
+@@ -14798,6 +14807,8 @@ public class View implements Drawable.Callback, KeyEvent.Callback,
+ 
+         mPrivateFlags &= ~PFLAG_FORCE_LAYOUT;
+         mPrivateFlags3 |= PFLAG3_IS_LAID_OUT;
++        long end_time = System.currentTimeMillis();
++        Log.d(VIEW_LOG_TAG,"Ritter::View layout() end:"+(end_time - start_time));
+     }
+ 
+     /**
+@@ -16429,6 +16440,8 @@ public class View implements Drawable.Callback, KeyEvent.Callback,
+      * @see #onMeasure(int, int)
+      */
+     public final void measure(int widthMeasureSpec, int heightMeasureSpec) {
++        Log.d(VIEW_LOG_TAG,"Ritter::View measure() start");
++        long start_time = System.currentTimeMillis();
+         boolean optical = isLayoutModeOptical(this);
+         if (optical != isLayoutModeOptical(mParent)) {
+             Insets insets = getOpticalInsets();
+@@ -16480,6 +16493,8 @@ public class View implements Drawable.Callback, KeyEvent.Callback,
+ 
+         mMeasureCache.put(key, ((long) mMeasuredWidth) << 32 |
+                 (long) mMeasuredHeight & 0xffffffffL); // suppress sign extension
++        long end_time = System.currentTimeMillis();
++        Log.d(VIEW_LOG_TAG,"Ritter::View measure() end:"+(end_time - start_time));
+     }
+ 
+     /**
+diff --git a/core/java/android/view/ViewRootImpl.java b/core/java/android/view/ViewRootImpl.java
+index 8410c5e..1d4a801 100644
+--- a/core/java/android/view/ViewRootImpl.java
++++ b/core/java/android/view/ViewRootImpl.java
+@@ -254,8 +254,16 @@ public final class ViewRootImpl implements ViewParent,
+ 
+     final DisplayAdjustments mDisplayAdjustments;
+ 
++    //Ritter_stackbox_old
+     // These are accessed by multiple threads.
+-    final Rect mWinFrame; // frame given by window manager.
++    //final Rect mWinFrame; // frame given by window manager.
++    //end
++
++    //Ritter_stackbox
++    // These are accessed by multiple threads.
++    //Change the visibility to make PhoneWindow can use
++    public final Rect mWinFrame; // frame given by window manager.
++    //end
+ 
+     final Rect mPendingOverscanInsets = new Rect();
+     final Rect mPendingVisibleInsets = new Rect();
+diff --git a/core/java/android/view/Window.java b/core/java/android/view/Window.java
+index 4631fd1..7112f41 100644
+--- a/core/java/android/view/Window.java
++++ b/core/java/android/view/Window.java
+@@ -157,6 +157,10 @@ public abstract class Window {
+     private final WindowManager.LayoutParams mWindowAttributes =
+         new WindowManager.LayoutParams();
+ 
++    //Ritter_stackbox
++    private int mStackBoxID = -1;
++    //end
++
+     /**
+      * API from a Window back to its caller.  This allows the client to
+      * intercept key dispatching, panels and menus, etc.
+@@ -1325,4 +1329,13 @@ public abstract class Window {
+      * @param event A key or touch event to inject to this window.
+      */
+     public void injectInputEvent(InputEvent event) { }
++
++    //Ritter_stackbox
++    public void setStackBoxID(int ID){
++        mStackBoxID = ID;
++    }
++
++    public int getStackBoxID(){
++        return mStackBoxID;
++    }
+ }
+diff --git a/policy/src/com/android/internal/policy/impl/PhoneWindow.java b/policy/src/com/android/internal/policy/impl/PhoneWindow.java
+index 5e3b918..8b13dc3 100644
+--- a/policy/src/com/android/internal/policy/impl/PhoneWindow.java
++++ b/policy/src/com/android/internal/policy/impl/PhoneWindow.java
+@@ -41,6 +41,7 @@ import com.android.internal.widget.ActionBarView;
+ 
+ import android.app.Activity;
+ import android.app.ActivityManager;
++import android.app.ActivityManagerNative;
+ import android.app.AlertDialog;
+ import android.app.KeyguardManager;
+ import android.app.WindowAppsManager;
+@@ -259,6 +260,11 @@ public class PhoneWindow extends Window implements MenuBuilder.Callback {
+     private long mExitTime = 0l;
+     //end
+ 
++    //Ritter_stackbox
++    public static boolean sSTACK_BOX_MODE = true;
++    private Rect mOriginalFrame = null;
++    //end
++
+     public PhoneWindow(Context context) {
+         super(context);
+         //Ritter_multi
+@@ -3056,17 +3062,23 @@ public class PhoneWindow extends Window implements MenuBuilder.Callback {
+                 .getSystemService("window_apps");
+         try {
+             APPs = mWindowAppsManager.getWindowApps();
++            //Ritter_stackbox
++            if(APPs.isEmpty()){
++                sSTACK_BOX_MODE = true;
++            } else {
++                sSTACK_BOX_MODE = false;
++            }
++            //end
+         } catch (Exception e){
+             e.printStackTrace();
+         }
+         ArrayList<String> pkgList = new ArrayList<String>(Arrays.asList(APPs.split("#")));
+         Log.d(TAG, "Ritter PW::generateLayout() APPs:" + APPs);
+-
+         Log.d(TAG, "Ritter PW::generateLayout() pkgList.size:" + pkgList.size()
+                 + " ,pkgList:"+pkgList);
+ 
+-        if (isAllowToAddWindowTitlebar
+-                && pkgList.contains(mPKGName) && !mPKGName.isEmpty()) {
++        if ((isAllowToAddWindowTitlebar && pkgList.contains(mPKGName) && !mPKGName.isEmpty())
++                || (getStackBoxID() != -1)) {
+             Log.d(TAG, "Ritter PW::generateLayout() mPKGName:" + mPKGName + " Add title");
+             Log.d(TAG, "Ritter PW::generateLayout() APPs:" + APPs);
+ 
+@@ -3139,12 +3151,22 @@ public class PhoneWindow extends Window implements MenuBuilder.Callback {
+                     if (event.getAction() == MotionEvent.ACTION_DOWN) {
+                         sDownX = (int) event.getRawX();
+                         sDownY = (int) event.getRawY();
++                        mOriginalFrame = new Rect(mDecor.getViewRootImpl().mWinFrame);
+                     } else if (event.getAction() == MotionEvent.ACTION_MOVE) {
+                         int newX = (int) event.getRawX();
+                         int newY = (int) event.getRawY();
+                         Log.d(TAG, "Ritter::PW onTouch TextView MOVE new x:"
+                                 + newX + ",y:" + newY);
+-                        moveAndResizeWindows((newX - sDownX), (newY - sDownY), 0, 0);
++                        //Ritter_stackbox old
++//                        moveAndResizeWindows((newX - sDownX), (newY - sDownY), 0, 0);
++                        //end
++                        //Ritter_stackbox
++                        if(sSTACK_BOX_MODE ){
++                            moveAndResizeStackBox((newX - sDownX), (newY - sDownY), 0, 0);
++                        } else {
++                            moveAndResizeWindows((newX - sDownX), (newY - sDownY), 0, 0);
++                        }
++                        //end
+                         sDownX = (int) event.getRawX();
+                         sDownY = (int) event.getRawY();
+                     } else if (event.getAction() == MotionEvent.ACTION_UP) {
+@@ -3164,7 +3186,16 @@ public class PhoneWindow extends Window implements MenuBuilder.Callback {
+                         int newY = (int) event.getRawY();
+                         Log.d(TAG,"Ritter::PW onTouch resizeBtn MOVE new x:"+newX
+                                 +",y:"+newY);
+-                        moveAndResizeWindows(0,(newY - sDownY),(newX - sDownX), (sDownY - newY));
++                        //Ritter_stackbox old
++//                        moveAndResizeWindows(0,(newY - sDownY),(newX - sDownX), (sDownY - newY));
++                        //end
++                        //Ritter_stackbox
++                        if(sSTACK_BOX_MODE){
++                            moveAndResizeStackBox(0,(newY - sDownY),(newX - sDownX), (sDownY - newY));
++                        } else {
++                            moveAndResizeWindows(0,(newY - sDownY),(newX - sDownX), (sDownY - newY));
++                        }
++                        //end
+                         sDownX = (int) event.getRawX();
+                         sDownY = (int) event.getRawY();
+                     } else if (event.getAction() == MotionEvent.ACTION_UP) {
+@@ -4276,4 +4307,28 @@ public class PhoneWindow extends Window implements MenuBuilder.Callback {
+             windowAttributesInWindow.isFullscreen = !windowAttributesInWindow.isFullscreen;
+        }
+     }
++
++    //Ritter_stackbox
++    private void moveAndResizeStackBox(int deltaX, int deltaY, int deltaW, int deltaH) {
++        Log.d(TAG,"Ritter::PW moveAndResizeStackBox deltaX:"+deltaX
++                +",deltaY:"+deltaY+",deltaW:"+deltaW+",deltaH:"+deltaH);
++        if(mOriginalFrame == null){
++            return;
++        }
++        mOriginalFrame.left += deltaX;
++        mOriginalFrame.right += deltaX + deltaW;
++        mOriginalFrame.top += deltaY;
++        mOriginalFrame.bottom += deltaY + deltaH;
++        Log.d(TAG, "Ritter::PW moveAndResizeStackBox mOriginalFrame:"
++                + mOriginalFrame);
++        boolean isRelayoutSuccess = false;
++        try {
++            isRelayoutSuccess = ActivityManagerNative.getDefault().relayoutWindow(getStackBoxID(), mOriginalFrame);
++        } catch (RemoteException e) {
++            // TODO Auto-generated catch block
++            e.printStackTrace();
++        }
++        Log.d(TAG, "Ritter::PW moveAndResizeStackBox isRelayoutSuccess:"
++                + isRelayoutSuccess);
++    }
+ }
+diff --git a/services/java/com/android/server/am/ActivityManagerService.java b/services/java/com/android/server/am/ActivityManagerService.java
+index 274f897..dcc13ce 100644
+--- a/services/java/com/android/server/am/ActivityManagerService.java
++++ b/services/java/com/android/server/am/ActivityManagerService.java
+@@ -125,6 +125,7 @@ import android.content.pm.ServiceInfo;
+ import android.content.res.CompatibilityInfo;
+ import android.content.res.Configuration;
+ import android.graphics.Bitmap;
++import android.graphics.Rect;
+ import android.net.Proxy;
+ import android.net.ProxyProperties;
+ import android.net.Uri;
+@@ -6997,6 +6998,7 @@ public final class ActivityManagerService extends ActivityManagerNative
+             long ident = Binder.clearCallingIdentity();
+             try {
+                 int stackId = mStackSupervisor.createStack();
++                Log.d(TAG,"Ritter::AMS createStack() stackId in AMS:"+stackId);
+                 mWindowManager.createStack(stackId, relativeStackBoxId, position, weight);
+                 if (taskId > 0) {
+                     moveTaskToStack(taskId, stackId, true);
+@@ -7087,8 +7089,10 @@ public final class ActivityManagerService extends ActivityManagerNative
+ 
+     @Override
+     public List<StackBoxInfo> getStackBoxes() {
+-        enforceCallingPermission(android.Manifest.permission.MANAGE_ACTIVITY_STACKS,
+-                "getStackBoxes()");
++        //Ritter_stackbox_old turn off the permission check
++        /*enforceCallingPermission(android.Manifest.permission.MANAGE_ACTIVITY_STACKS,
++                "getStackBoxes()");*/
++        //end
+         long ident = Binder.clearCallingIdentity();
+         try {
+             List<StackBoxInfo> stackBoxInfos = mWindowManager.getStackBoxInfos();
+@@ -16461,4 +16465,16 @@ public final class ActivityManagerService extends ActivityManagerNative
+         Log.d(TAG,"Ritter::AMS moveTaskToTop_AM() taskID:"+taskID);
+         moveTaskToFront(taskID,0,null);
+     }*/
++
++    //Ritter_stackbox
++    public boolean relayoutWindow(int stackBoxID, Rect frame){
++        long ident = Binder.clearCallingIdentity();
++//        synchronized (this) {
++            try {
++                return mWindowManager.relayoutWindow(stackBoxID,frame);
++            } finally {
++                Binder.restoreCallingIdentity(ident);
++            }
++//        }
++    }
+ }
+diff --git a/services/java/com/android/server/am/ActivityStack.java b/services/java/com/android/server/am/ActivityStack.java
+index af48e65..52e7877 100644
+--- a/services/java/com/android/server/am/ActivityStack.java
++++ b/services/java/com/android/server/am/ActivityStack.java
+@@ -256,6 +256,10 @@ final class ActivityStack {
+ 
+     final Handler mHandler;
+ 
++    //Ritter_stackbox
++    private boolean mIsMultiWindowStack = false;
++    //end
++
+     final class ActivityStackHandler extends Handler {
+         //public Handler() {
+         //    if (localLOGV) Log.d(TAG, "Handler started!");
+@@ -1072,8 +1076,16 @@ final class ActivityStack {
+         boolean showHomeBehindStack = false;
+         //end
+ 
++        //Ritter_stackbox old
++        /*boolean behindFullscreen = !mStackSupervisor.isFrontStack(this) &&
++                !(forceHomeShown && isHomeStack());*/
++        //end
++
++        //Ritter_stackbox
++        //If I am multi window stack, do not make me covered by black.
+         boolean behindFullscreen = !mStackSupervisor.isFrontStack(this) &&
+-                !(forceHomeShown && isHomeStack());
++                !(forceHomeShown && isHomeStack()) && !isMultiWindowStack();
++        //end
+ 
+         Log.d(TAG,"Ritter::AS ensureActivitiesVisibleLocked: behindFullscreen = !mStackSupervisor.isFrontStack(this) && !(forceHomeShown && isHomeStack()");
+         Log.d(TAG,"Ritter::AS ensureActivitiesVisibleLocked:behindFullscreen:"+behindFullscreen);
+@@ -1119,6 +1131,13 @@ final class ActivityStack {
+                 }
+                 //end
+ 
++                //Ritter_stackbox
++                if (r.task != null && r.task.stack != null
++                        && r.task.stack.isMultiWindowStack()) {
++                    r.fullscreen = false;
++                }
++                //end
++
+                 if (r.finishing) {
+                     continue;
+                 }
+@@ -3767,4 +3786,13 @@ final class ActivityStack {
+         return "ActivityStack{" + Integer.toHexString(System.identityHashCode(this))
+                 + " stackId=" + mStackId + ", " + mTaskHistory.size() + " tasks}";
+     }
++
++    //Ritter_stackbox
++    public void setMultiWindowStack(boolean isMultiWindowStack){
++        mIsMultiWindowStack = isMultiWindowStack;
++    }
++
++    public boolean isMultiWindowStack(){
++        return mIsMultiWindowStack;
++    }
+ }
+diff --git a/services/java/com/android/server/am/ActivityStackSupervisor.java b/services/java/com/android/server/am/ActivityStackSupervisor.java
+index e564319..ef7dc88 100644
+--- a/services/java/com/android/server/am/ActivityStackSupervisor.java
++++ b/services/java/com/android/server/am/ActivityStackSupervisor.java
+@@ -40,6 +40,7 @@ import android.app.IActivityManager;
+ import android.app.IApplicationThread;
+ import android.app.IThumbnailReceiver;
+ import android.app.PendingIntent;
++import android.app.WindowAppsManager;
+ import android.app.ActivityManager.RunningTaskInfo;
+ import android.app.IActivityManager.WaitResult;
+ import android.app.ResultInfo;
+@@ -53,6 +54,7 @@ import android.content.pm.ApplicationInfo;
+ import android.content.pm.PackageManager;
+ import android.content.pm.ResolveInfo;
+ import android.content.res.Configuration;
++import android.graphics.Rect;
+ import android.os.Binder;
+ import android.os.Bundle;
+ import android.os.Debug;
+@@ -212,6 +214,9 @@ public final class ActivityStackSupervisor {
+      **/
+     public boolean mMoveTaskBackTaskInvisible = false;
+ 
++    //Ritter_stackbox
++    public static boolean STACK_BOX_MODE = true;
++
+     public ActivityStackSupervisor(ActivityManagerService service, Context context,
+             Looper looper) {
+         mService = service;
+@@ -982,6 +987,11 @@ public final class ActivityStackSupervisor {
+                 }
+             }
+             app.forceProcessStateUpTo(ActivityManager.PROCESS_STATE_TOP);
++            //Ritter_stackbox
++            // If the first activity in task RUN_IN_WINDOW,
++            // then other activities should RUN_IN_WINDOW too, reference from Tieto's patch
++            r.intent.addFlags(r.task.intent.getFlags() & Intent.FLAG_ACTIVITY_IN_MULTI_WINDOW);
++            //end
+             app.thread.scheduleLaunchActivity(new Intent(r.intent), r.appToken,
+                     System.identityHashCode(r), r.info,
+                     new Configuration(mService.mConfiguration), r.compat,
+@@ -1273,11 +1283,33 @@ public final class ActivityStackSupervisor {
+ 
+     ActivityStack adjustStackFocus(ActivityRecord r) {
+         Log.d(TAG,"Ritter::ASS adjustStackFocus() mFocusedStack:"+getFocusedStack().getStackId());
++        //Ritter_satckbox
++        String APPs = "";
++        WindowAppsManager mWindowAppsManager = (WindowAppsManager) mContext
++                .getSystemService("window_apps");
++        try {
++            APPs = mWindowAppsManager.getWindowApps();
++            if(APPs.isEmpty()){
++                STACK_BOX_MODE = true;
++            } else {
++                STACK_BOX_MODE = false;
++            }
++        } catch (Exception e) {
++            e.printStackTrace();
++        }
++        //end
++
+         final TaskRecord task = r.task;
+         if (r.isApplicationActivity() || (task != null && task.isApplicationTask())
+-                //Ritter_multi make RecentApp stays in APP stack
+-                ||r.isRecentsActivity()
++                //Ritter_stackbox old
++                //Ritter_multi make RecentApp stays in APP stack (other part 1370)
++                /*||r.isRecentsActivity()
++                ) {*/
++                //end
++            //Ritter_stackbox
++                || (STACK_BOX_MODE ? false : r.isRecentsActivity())
+                 ) {
++            //end
+             if (task != null) {
+                 if (mFocusedStack != task.stack) {
+                     if (DEBUG_FOCUS || DEBUG_STACK) Log.d(TAG,
+@@ -1290,7 +1322,8 @@ public final class ActivityStackSupervisor {
+                 return mFocusedStack;
+             }
+ 
+-            if (mFocusedStack != null) {
++            //Ritter_stackbox old
++/*            if (mFocusedStack != null) {
+                 if (DEBUG_FOCUS || DEBUG_STACK) Log.d(TAG,
+                         "adjustStackFocus: Have a focused stack=" + mFocusedStack);
+                 return mFocusedStack;
+@@ -1304,14 +1337,45 @@ public final class ActivityStackSupervisor {
+                     mFocusedStack = stack;
+                     return mFocusedStack;
+                 }
++            }*/
++            //end
++
++            //Ritter_stackbox
++            if(!STACK_BOX_MODE){
++                for (int stackNdx = mStacks.size() - 1; stackNdx > 0; --stackNdx) {
++                    ActivityStack stack = mStacks.get(stackNdx);
++                    if (!stack.isHomeStack()) {
++                        if (DEBUG_FOCUS || DEBUG_STACK) Log.d(TAG,
++                                "adjustStackFocus: Setting focused stack=" + stack);
++                        mFocusedStack = stack;
++                        return mFocusedStack;
++                    }
++                }
++            } else {
++                if(r.intent != null){
++                    r.intent.addFlags(Intent.FLAG_ACTIVITY_IN_MULTI_WINDOW);
++                }
+             }
++            //end
+ 
+             // Time to create the first app stack for this user.
+             int stackId = mService.createStack(-1, HOME_STACK_ID,
+                 StackBox.TASK_STACK_GOES_OVER, 1.0f);
++
++            //Ritter_stackbox
++            if(STACK_BOX_MODE){
++                mWindowManager.relayoutWindow(stackId, new Rect(200,200,800,1000));
++            }
++            //end
++
+             if (DEBUG_FOCUS || DEBUG_STACK) Log.d(TAG, "adjustStackFocus: New stack r=" + r +
+                     " stackId=" + stackId);
+             mFocusedStack = getStack(stackId);
++            //Ritter_stackbox
++            // Tell whether this activtiy stack a multi window stack,
++            // if true, it will not be covered by black screen.
++            mFocusedStack.setMultiWindowStack(STACK_BOX_MODE);
++            //end
+             return mFocusedStack;
+         }
+         return mHomeStack;
+@@ -1328,8 +1392,13 @@ public final class ActivityStackSupervisor {
+ 
+         //Ritter_multi new
+         if ((!r.isApplicationActivity() || (r.task != null && !r.task.isApplicationTask()))
+-                //Ritter_multi RecentApp's focused stack is APP stack
+-                &&!r.isRecentsActivity()) {
++                //Ritter_stackbox old
++                //Ritter_multi RecentApp's focused stack is APP stack (other part 1283)
++                //&&!r.isRecentsActivity()) {
++                //end
++                // Ritter_stackbox in stack box mode, don't launch recent APP in APP stack
++                && (STACK_BOX_MODE ? true : !r.isRecentsActivity())) {
++                // end
+             if (mStackState != STACK_STATE_HOME_IN_FRONT) {
+                 if (DEBUG_STACK || DEBUG_FOCUS) Log.d(TAG, "setFocusedStack: mStackState old=" +
+                         stackStateToString(mStackState) + " new=" +
+diff --git a/services/java/com/android/server/wm/DisplayContent.java b/services/java/com/android/server/wm/DisplayContent.java
+index afa4f78..56aa553 100644
+--- a/services/java/com/android/server/wm/DisplayContent.java
++++ b/services/java/com/android/server/wm/DisplayContent.java
+@@ -25,6 +25,7 @@ import android.app.ActivityManager.StackBoxInfo;
+ import android.graphics.Rect;
+ import android.graphics.Region;
+ import android.os.Debug;
++import android.util.Log;
+ import android.util.Slog;
+ import android.view.Display;
+ import android.view.DisplayInfo;
+@@ -32,6 +33,8 @@ import android.view.DisplayInfo;
+ import java.io.PrintWriter;
+ import java.util.ArrayList;
+ 
++import com.android.server.am.ActivityStackSupervisor;
++
+ class DisplayContentList extends ArrayList<DisplayContent> {
+ }
+ 
+@@ -231,7 +234,12 @@ class DisplayContent {
+                         || position == StackBox.TASK_STACK_GOES_UNDER) {
+                     // Position indicates a new box is added at top level only.
+                     if (box.contains(relativeStackBoxId)) {
+-                        StackBox newBox = new StackBox(mService, this, null);
++                        //Ritter_stackbox old
++                        //StackBox newBox = new StackBox(mService, this, null);
++                        //end
++                        //Ritter_stackbox
++                        StackBox newBox = new StackBox(mService, this, null, stackId, ActivityStackSupervisor.STACK_BOX_MODE);
++                        //end
+                         newStack = new TaskStack(mService, stackId, this);
+                         newStack.mStackBox = newBox;
+                         newBox.mStack = newStack;
+@@ -273,9 +281,12 @@ class DisplayContent {
+     }
+ 
+     void addStackBox(StackBox box, boolean toTop) {
+-        if (mStackBoxes.size() >= 2) {
++        //Ritter_stackbox old
++        // Unlimited the stackbox number
++        /*if (mStackBoxes.size() >= 2) {
+             throw new RuntimeException("addStackBox: Too many toplevel StackBoxes!");
+-        }
++        }*/
++        //end
+         mStackBoxes.add(toTop ? mStackBoxes.size() : 0, box);
+     }
+ 
+@@ -325,7 +336,8 @@ class DisplayContent {
+     boolean moveHomeStackBox(boolean toTop) {
+         if (DEBUG_STACK) Slog.d(TAG, "moveHomeStackBox: toTop=" + toTop + " Callers=" +
+                 Debug.getCallers(4));
+-        switch (mStackBoxes.size()) {
++        //Ritter_stackbox old
++        /*switch (mStackBoxes.size()) {
+             case 0: throw new RuntimeException("moveHomeStackBox: No home StackBox!");
+             case 1: return false; // Only the home StackBox exists.
+             case 2:
+@@ -335,7 +347,26 @@ class DisplayContent {
+                 }
+                 return false;
+             default: throw new RuntimeException("moveHomeStackBox: Too many toplevel StackBoxes!");
++        }*/
++        //end
++
++        //Ritter_satckbox
++        //Follow Tieto's patch, make the Home stackbox always stay bottom
++        if (toTop) {
++            mStackBoxes.remove(mHomeStack.mStackBox);
++            int i = 0;
++            for (; i < mStackBoxes.size(); i++) {
++                if (mStackBoxes.get(i).isFloating()) {
++                    break;
++                }
++            }
++            mStackBoxes.add(i, mHomeStack.mStackBox);
++        } else {
++            mStackBoxes.remove(mHomeStack.mStackBox);
++            mStackBoxes.add(0, mHomeStack.mStackBox);
+         }
++        return true;
++        //end
+     }
+ 
+     /**
+@@ -503,4 +534,18 @@ class DisplayContent {
+         }
+         pw.println();
+     }
++
++    //Ritter_stackbox
++    public boolean relayoutStackBox(int stackBoxID, Rect frame){
++        for(StackBox sb:mStackBoxes){
++            if((sb.getStackId() == stackBoxID)
++                    && (sb.relayout(frame))){
++                layoutNeeded = true; //If no this flag, WMS::performLayoutLockedInner() won't work
++                Log.d(TAG,"RitterStackBox::DisplayContent relayoutStackBox() return true");
++                return true;
++            }
++        }
++        Log.d(TAG,"RitterStackBox::DisplayContent relayoutStackBox() return false");
++        return false;
++    }
+ }
+diff --git a/services/java/com/android/server/wm/StackBox.java b/services/java/com/android/server/wm/StackBox.java
+index d054e9a..83bb42a 100644
+--- a/services/java/com/android/server/wm/StackBox.java
++++ b/services/java/com/android/server/wm/StackBox.java
+@@ -17,6 +17,7 @@
+ package com.android.server.wm;
+ 
+ import android.graphics.Rect;
++import android.util.Log;
+ import android.util.Slog;
+ 
+ import static com.android.server.am.ActivityStackSupervisor.HOME_STACK_ID;
+@@ -85,10 +86,27 @@ public class StackBox {
+     /** Used to keep from reallocating a temporary Rect for propagating bounds to child boxes */
+     Rect mTmpRect = new Rect();
+ 
++    //Ritter_stackbox
++    private boolean mIsRelayouted = false;
++
++    private boolean mIsFloating = false;
++    //end
++
++    //Ritter_stackbox
++    StackBox(WindowManagerService service, DisplayContent displayContent, StackBox parent, int stackBoxID, boolean isFloating) {
++        Log.d(TAG,"RitterStackBox::StackBoxA() id:"+stackBoxID);
++        mStackBoxId = stackBoxID;
++        mService = service;
++        mDisplayContent = displayContent;
++        mParent = parent;
++        mIsFloating = isFloating;
++    }
++
+     StackBox(WindowManagerService service, DisplayContent displayContent, StackBox parent) {
+         synchronized (StackBox.class) {
+             mStackBoxId = sCurrentBoxId++;
+         }
++        Log.d(TAG,"RitterStackBox::StackBoxB() ID:"+mStackBoxId);
+ 
+         mService = service;
+         mDisplayContent = displayContent;
+@@ -300,7 +318,14 @@ public class StackBox {
+         if (mStack != null) {
+             change |= !mBounds.equals(bounds);
+             if (change) {
+-                mBounds.set(bounds);
++                //Ritter_stackbox old
++//                mBounds.set(bounds);
++                //end
++                //Ritter_stackbox
++                if(!mIsRelayouted){
++                    mBounds.set(bounds);
++                }
++                //end
+                 mStack.setBounds(bounds, underStatusBar);
+             }
+         } else {
+@@ -415,4 +440,24 @@ public class StackBox {
+                 + " first=" + System.identityHashCode(mFirst)
+                 + " second=" + System.identityHashCode(mSecond) + "}";
+     }
++
++    //Ritter_stackbox
++    public boolean isRelayouted(){
++        return mIsRelayouted;
++    }
++
++    public boolean relayout(Rect frame){
++        Log.d(TAG,"RitterStackBox::StackBox relayout() frame:"+frame);
++        mIsRelayouted = true;
++        if(mBounds.equals(frame)){
++            return false;
++        }
++        mBounds.set(frame);
++        Log.d(TAG,"RitterStackBox::StackBox relayout() return true");
++        return true;
++    }
++
++    public boolean isFloating(){
++        return mIsFloating;
++    }
+ }
+diff --git a/services/java/com/android/server/wm/WindowManagerService.java b/services/java/com/android/server/wm/WindowManagerService.java
+index b9fe9b0..3da6923 100644
+--- a/services/java/com/android/server/wm/WindowManagerService.java
++++ b/services/java/com/android/server/wm/WindowManagerService.java
+@@ -11171,4 +11171,18 @@ public class WindowManagerService extends IWindowManager.Stub
+         return res;
+     }
+ 
++    //Ritter_stackbox
++    public boolean relayoutWindow(int stackBoxID, Rect frame){
++        Log.d(TAG,"RitterStackBox::WMS relayoutWindow() ID:"+stackBoxID);
++        synchronized(mWindowMap) {
++            final int count = mDisplayContents.size();
++            for(int i=0; i< count;i++){
++                if(mDisplayContents.valueAt(i).relayoutStackBox(stackBoxID, frame)){
++                    performLayoutAndPlaceSurfacesLocked(); //real relayout method
++                    return true;
++                }
++            }
++        }
++        return false;
++    }
+ }
+diff --git a/services/java/com/android/server/wm/WindowState.java b/services/java/com/android/server/wm/WindowState.java
+index 27b59b2..faed53f 100644
+--- a/services/java/com/android/server/wm/WindowState.java
++++ b/services/java/com/android/server/wm/WindowState.java
+@@ -473,13 +473,28 @@ final class WindowState implements WindowManagerPolicy.WindowState {
+         mHaveFrame = true;
+ 
+         TaskStack stack = mAppToken != null ? getStack() : null;
+-        if (stack != null && stack.hasSibling()) {
++        //Ritter_stackbox old
++        /*if (stack != null && stack.hasSibling()) {
+             Log.d(TAG, "Ritter::WS computeFrameLw() A1 stack != null && stack.hasSibling()");
+             mContainingFrame.set(getStackBounds(stack));
+             if (mUnderStatusBar) {
+                 Slog.v(TAG, "Ritter::WS B1 computeFrameLw() mUnderStatusBar");
+                 mContainingFrame.top = pf.top;
++            }*/
++        //end
++        //Ritter_stackbox Make the mContainingFrame equals stackBox's mBound
++        if(stack != null){
++            Log.d(TAG, "Ritter::WS computeFrameLw() stack.mStackBox.isFloating():"+stack.mStackBox.isFloating()
++                    +",ID:"+stack.mStackBox.mStackBoxId+",mBounds:"+stack.mStackBox.mBounds);
++        }
++        if (stack != null && (stack.hasSibling() || stack.mStackBox.isFloating())) {
++            Log.d(TAG, "Ritter::WS computeFrameLw() A1 stack != null && stack.hasSibling()");
++            mContainingFrame.set(getStackBounds(stack));
++            if (mUnderStatusBar && !stack.mStackBox.isFloating()) {
++                Slog.v(TAG, "Ritter::WS B1 computeFrameLw() mUnderStatusBar");
++                mContainingFrame.top = pf.top;
+             }
++            //end
+         } else {
+             Log.d(TAG, "Ritter::WS A2 computeFrameLw() mUnderStatusBar");
+             mContainingFrame.set(pf);
+@@ -641,6 +656,8 @@ final class WindowState implements WindowManagerPolicy.WindowState {
+         Log.d(TAG,"Ritter::WS computeFrameLw() B after Gravity.apply mFrame:"+mFrame.toShortString());
+         //System.out.println("Out: " + mFrame);
+ 
++        //Ritter_stackbox old
++        /*
+         // Now make sure the window fits in the overall display.
+         Gravity.applyDisplay(mAttrs.gravity, df, mFrame);
+         Log.d(TAG,"Ritter::WS computeFrameLw() C after Gravity.applyDisplay mAttrs.x:"+mAttrs.x+",mAttrs.y:"+mAttrs.y+",mAttrs.w:"+mAttrs.width+",mAttrs.h:"+mAttrs.height);
+@@ -700,7 +717,45 @@ final class WindowState implements WindowManagerPolicy.WindowState {
+         mVisibleInsets.set(mVisibleFrame.left - mFrame.left,
+                 mVisibleFrame.top - mFrame.top,
+                 mFrame.right - mVisibleFrame.right,
++                mFrame.bottom - mVisibleFrame.bottom);*/
++        //end
++
++        //Ritter_stackbox
++        // In floating mode, don't need to fit display, reference Tieto's patch.
++        if(stack!=null && !stack.mStackBox.isFloating()){
++        // Now make sure the window fits in the overall display.
++        Gravity.applyDisplay(mAttrs.gravity, df, mFrame);
++        Log.d(TAG,"Ritter::WS computeFrameLw() C after Gravity.applyDisplay mAttrs.x:"+mAttrs.x+",mAttrs.y:"+mAttrs.y+",mAttrs.w:"+mAttrs.width+",mAttrs.h:"+mAttrs.height);
++        Log.d(TAG,"Ritter::WS computeFrameLw() C after Gravity.applyDisplay mFrame:"+mFrame.toShortString());
++        Log.d(TAG,"Ritter::WS computeFrameLw() C after Gravity.applyDisplay mAttrs.isInWindowing :"+mAttrs.isInWindowing);
++        // Make sure the content and visible frames are inside of the
++        // final window frame.
++        mContentFrame.set(Math.max(mContentFrame.left, mFrame.left),
++                Math.max(mContentFrame.top, mFrame.top),
++                Math.min(mContentFrame.right, mFrame.right),
++                Math.min(mContentFrame.bottom, mFrame.bottom));
++
++        mVisibleFrame.set(Math.max(mVisibleFrame.left, mFrame.left),
++                Math.max(mVisibleFrame.top, mFrame.top),
++                Math.min(mVisibleFrame.right, mFrame.right),
++                Math.min(mVisibleFrame.bottom, mFrame.bottom));
++
++        mOverscanInsets.set(Math.max(mOverscanFrame.left - mFrame.left, 0),
++                Math.max(mOverscanFrame.top - mFrame.top, 0),
++                Math.max(mFrame.right - mOverscanFrame.right, 0),
++                Math.max(mFrame.bottom - mOverscanFrame.bottom, 0));
++
++        mContentInsets.set(mContentFrame.left - mFrame.left,
++                mContentFrame.top - mFrame.top,
++                mFrame.right - mContentFrame.right,
++                mFrame.bottom - mContentFrame.bottom);
++
++        mVisibleInsets.set(mVisibleFrame.left - mFrame.left,
++                mVisibleFrame.top - mFrame.top,
++                mFrame.right - mVisibleFrame.right,
+                 mFrame.bottom - mVisibleFrame.bottom);
++        }
++        //end
+ 
+         mCompatFrame.set(mFrame);
+         if (mEnforceSizeCompat) {
+@@ -845,9 +900,12 @@ final class WindowState implements WindowManagerPolicy.WindowState {
+     }
+ 
+     private Rect getStackBounds(TaskStack stack) {
++        Log.d(TAG, "Ritter::WS getStackBounds()");
+         if (stack != null) {
++            Log.d(TAG, "Ritter::WS getStackBounds() stack != null");
+             return stack.mStackBox.mBounds;
+         }
++        Log.d(TAG, "Ritter::WS getStackBounds() stack == null");
+         return mFrame;
+     }
+ 
