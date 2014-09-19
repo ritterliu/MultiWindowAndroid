@@ -3,12 +3,13 @@ MultiWindowAndroid
 
 A multi window system basing on android KitKat 4.4 .
 
-1. multi_window_android_v0.1.patch:
+##multi_window_android_v0.1.patch
 
 A patch you should apply in the root of AOSP, which has a WindowApps to let you select which APP shows in windowing state.
 
+Special thanks to CornerStone, by studying their code, I write this multi window patch.
 
-2. stack_box.patch:
+##stack_box.patch
 
 After applying the multi_window_android_v0.1.patch, you can apply the stack_box.patch in AOSP/framework/base/, which will make the windowing APPs show in StackBox. 
 More info about StackBox: http://blog.csdn.net/ritterliu/article/details/37560239
